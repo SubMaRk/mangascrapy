@@ -1,0 +1,5 @@
+requests
+tqdm
+latest_user_agents
+beautifulsoup4
+selenium
