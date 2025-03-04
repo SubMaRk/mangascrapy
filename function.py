@@ -4,10 +4,13 @@ import sys
 import json
 import time
 import socket
+import psutil
 from PIL import Image
 import requests
 import urllib.parse
 import latest_user_agents
+
+Image.MAX_IMAGE_PIXELS = None
 
 def cls():
     """Clear the terminal screen across all operating systems."""
@@ -137,7 +140,7 @@ def isOnline(host, port=443, timeout=10):
     
 def checkNet():
     try:
-        response = requests.get("https://www.google.com", timeout=15)
+        response = requests.get("https://funtoons.online", timeout=15)
         return response.status_code == 200
     except (requests.ConnectionError,requests.Timeout):
         return False
@@ -194,8 +197,7 @@ def findchapternum(title):
     
 def mangaid(manga_url):
     pattern = re.compile(r"([^/]+)/?$")
-    decode_url = urllib.parse.urlparse(manga_url)
-    urlpath = decode_url.path
+    urlpath = manga_url.path
     match = pattern.search(urlpath)
     if match:
         return match.group(1)
@@ -227,12 +229,18 @@ def formatSize(size):
     return f"{size:.2f} {suffixes[i]}"
 
 def checkImg(imgPath):
-    """Verify if an image is valid using PIL."""
+    """Verify if an image is fully loaded and valid."""
     try:
         with Image.open(imgPath) as img:
-            img.verify()
+            img.load()
         return True
     except Exception:
+        return False
+    
+def compareSize(contentsize, localsize):
+    if contentsize == localsize:
+        return True
+    else:
         return False
     
 def mangaID(url):
@@ -267,3 +275,36 @@ def numChapter(mgID, chapterID):
         return numbers[0]
     else:
         return ''
+    
+def checkSpace(required_mb=4096, path=None):
+    """
+    Checks if there is at least `required_mb` of free space on the current drive or specified path.
+
+    :param required_mb: Minimum free space required in MB (default: 4096MB)
+    :param path: Path to check (default: current working directory)
+    :return: True if enough space is available, False otherwise
+    """
+    if path is None:
+        path = os.getcwd()  # Use current working directory if no path is specified
+    
+    drive = os.path.splitdrive(path)[0]  # Extract the drive letter
+    free_space_mb = psutil.disk_usage(drive).free / (1024**2)  # Convert bytes to MB
+    
+    return free_space_mb >= required_mb
+
+def safeDecode(url: str) -> str:
+    """Detect and safely decode a URL without over-decoding."""
+    if "%" not in url:
+        return url  # Already decoded, return as is
+    
+    once_decoded = urllib.parse.unquote(url)
+    
+    if "%" not in once_decoded:
+        return once_decoded  # Properly decoded after one unquote
+    
+    twice_decoded = urllib.parse.unquote(once_decoded)
+    
+    if "%" not in twice_decoded:
+        return twice_decoded  # Was double-encoded, return fully decoded
+    
+    return once_decoded

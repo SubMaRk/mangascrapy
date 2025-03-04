@@ -35,7 +35,13 @@ def getHeaders():
         'Accept-Language': 'th-TH,th;q=0.9,en-US;q=0.8,en;q=0.7',
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
         "Connection": "keep-alive",
-        'Upgrade-Insecure-Requests': '1'
+        'Upgrade-Insecure-Requests': '1',
+        "DNT": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "same-origin",
+        "Sec-Fetch-User": "?1",
+        "Content-Type": "text/html; charset=UTF-8"
     }
 
 def bssoup(url, log, logfile, max_retries=5):
@@ -257,7 +263,24 @@ def checkExist(chapterlist, chapterurls):
 
 def fetchInfo(url, start, end, output, wThread, iThread, listchapter, nocover, debug, savejson, update, log):
     # Check internet connection
-    function.waitNet()
+    #function.waitNet()
+    cprFile = os.path.join(os.getcwd(), "copyrights.txt")
+    htFile = os.path.join(os.getcwd(), "hentai.txt")
+    linkFile = os.path.join(os.getcwd(), "link.txt")
+    
+    if os.path.exists(cprFile):
+        cprList = function.readFile(cprFile)
+        if url in cprList:
+            print(f"{function.gettime()}: ⚠️ The series has been copyrighted in Thailand. Skipping...")
+            return
+    
+    if os.path.exists(htFile):
+        hentaiList = function.readFile(htFile)
+        if url in hentaiList:
+            print(f"{function.gettime()}: ⚠️ The series is Hentai. Skipping...")
+            return
+        
+    url = function.safeDecode(url)
     
     domain = urllib.parse.urlparse(url).netloc
     domain = domain.replace('www.', '')
@@ -288,6 +311,15 @@ def fetchInfo(url, start, end, output, wThread, iThread, listchapter, nocover, d
     noChapter = os.path.join(fLog, f"nochapter.log")
     notDown = os.path.join(fLog, f"notdownloaded.log")
     
+    # Check available free space before starting
+    if function.checkSpace():
+        print(f"{function.gettime()}: ✅ Sufficient space available. Starting process...")
+    else:
+        print(f"{function.gettime()}: ❌ Not enough free space! Process aborted.")
+        if log:
+            function.writeFile(logFile, f"{function.gettime()}: ❌ Not enough free space! Process aborted.\n")
+        exit(1)
+    
     # Fetch manga info from url
     soup = bssoup(url, log, logFile)
     
@@ -301,15 +333,19 @@ def fetchInfo(url, start, end, output, wThread, iThread, listchapter, nocover, d
     
     # Check if section is found
     if not section:
-        print(f"{function.gettime()}: Section not found. Exiting...")
+        print(f"{function.gettime()}: Section {url} not found. Exiting...")
+        if log:
+            function.writeFile(logFile, f"{function.gettime()}: Section for {url} not found.\n")
         exit(1)
     
     # Handle found section from ID
     config = emconfig.config(section_id)
     print(f"{function.gettime()}: Fetching information from url: {url}...")
+    if log:
+        function.writeFile(logFile, f"{function.gettime()}: Fetching information from url: {url}...\n")
     mangaData = extractData(section, config)
     
-    if  len(mangaData["chapterlist"]) == 0:
+    if len(mangaData["chapterlist"]) == 0:
         print(f"{function.gettime()}: No chapters found. Exiting...")
         if log:
             function.writeFile(logFile, f"{function.gettime()}: No chapters found.\n")
@@ -354,32 +390,47 @@ def fetchInfo(url, start, end, output, wThread, iThread, listchapter, nocover, d
     if savejson is True:
         jsonFile = os.path.join(fJson, f"{mgTitle}.json")
         print(f"{function.gettime()}: 💾 Saving data to: {jsonFile}...")
+        if log:
+            function.writeFile(logFile, f"{function.gettime()}: 💾 Saving data to: {jsonFile}...\n")
         if not os.path.exists(jsonFile):
             function.savejson(jsonFile, mgTitle=mgTitle, mgtype=mgType, mggenres=mgGenres, mgstatus=mgStatus, chaptercount=len(mangaData["chapterlist"]))
 
             mgTitle, mgType, mgGenres, mgStatus, chaptercount, chapterurls = function.readjson(jsonFile)
             print(f"{function.gettime()}: 📁 JSON data saved to {jsonFile}")
+            if log:
+                function.writeFile(logFile, f"{function.gettime()}: 📁 JSON data saved to {jsonFile}...\n")
         else:
             # Update new information to file
             function.savejson(jsonFile, mgTitle=mgTitle, mgtype=mgType, mggenres=mgGenres, mgstatus=mgStatus, chaptercount=len(mangaData["chapterlist"]))
 
             print(f"{function.gettime()}: 🔄 JSON data updated to {jsonFile}")
+            if log:
+                function.writeFile(logFile, f"{function.gettime()}: 🔄 JSON data updated to {jsonFile}...\n")
             mgTitle, mgType, mgGenres, mgStatus, chaptercount, chapterurls = function.readjson(jsonFile)
     
     if update is True:
         jsonFile = os.path.join(fJson, f"{mgTitle}.json")
         function.savejson(jsonFile, mgtitle=mgTitle, mgtype=mgType, mggenres=mgGenres, mgstatus=mgStatus, chaptercount=len(mangaData["chapterlist"]))
         print(f"{function.gettime()}: 🔄 JSON data updated to {jsonFile}")
+        if log:
+            function.writeFile(logFile, f"{function.gettime()}: 🔄 JSON data updated to {jsonFile}...\n")
     
     # Check if chapters exist
     if savejson is True:
         notLoad = checkExist(chapterList, chapterurls)
         if notLoad is None:
-            print(f"{function.gettime()}: All chapters exist.")
+            print(f"{function.gettime()}: All chapters of {url} are exist.")
+            if log:
+                function.writeFile(logFile, f"{function.gettime()}: All chapters of {url} are exist.\n")
+    
             exit(0)
         else:
             print(f"{function.gettime()}: Missing chapters: \n{'\n'.join(chap['url'] for chap in notLoad)}")
+            if log:
+                function.writeFile(logFile, f"{function.gettime()}: Missing chapters of {url}: \n{'\n'.join(chap['url'] for chap in notLoad)}\n")
             print("Downloading missing chapters...")
+            if log:
+                function.writeFile(logFile, f"{function.gettime()}: Downloading missing chapters from {url}...\n")
             chapterList = notLoad
     
     # Create manga folder
@@ -397,16 +448,20 @@ def fetchInfo(url, start, end, output, wThread, iThread, listchapter, nocover, d
 
             if not chapterUrl or not chapterTitle:
                 print(f"{function.gettime()}: ⚠️ Skipping chapter {chapterUrl}: Missing title or URL.")
+                if log:
+                    function.writeFile(logFile, f"{function.gettime()}: ⚠️ Skipping chapter {chapterUrl}: Missing title or URL.\n")
                 continue
 
             # Get chapter number and create folder for it
             chapterNumber = function.getchapter(str(chapterTitle))
             if not chapterNumber:
-                mgID = function.mangaID(urllib.parse.unquote(url))
+                mgID = function.mangaID(url)
                 chID = function.mangaID(chapter)
                 chapterNumber = function.numChapter(mgID, chID)
 
             print(f"{function.gettime()}: 🏁 Submitting chapter {i + 1}/{len(chapterList)} -> {chapterUrl}")
+            if log:
+                function.writeFile(logFile, f"{function.gettime()}: 🏁 Submitting chapter {i + 1}/{len(chapterList)} -> {chapterUrl}\n")
 
             # Submit the task and store the future
             if savejson is True:
@@ -424,6 +479,11 @@ def fetchInfo(url, start, end, output, wThread, iThread, listchapter, nocover, d
                 print(f"{function.gettime()}: ✅ Successfully processed {chapterUrl}")
             except Exception as e:
                 print(f"{function.gettime()}: ❌ Error processing {chapterUrl}: {e}")
+    
+    if os.path.exists(linkFile):
+        linkList = function.readFile(linkFile)
+        if url not in linkList:
+            function.writeFile(linkFile, f"{url}\n")
 
 def processChapter(chapterUrl, chapterTitle, chapterNumber, mgFolder, iThread, debug, savejson, log, logFile, notDown, jsonFile=None):
     soup = bssoup(chapterUrl, log, logFile)
@@ -433,33 +493,31 @@ def processChapter(chapterUrl, chapterTitle, chapterNumber, mgFolder, iThread, d
     
     # Check images elements have been existing
     if detectEncrypt(soup) is True:
-        print(f"{function.gettime()}: Found encrypted images.")
+        print(f"{function.gettime()}: Found encrypted images from {chapterUrl}.")
+        if log:
+            function.writeFile(logFile, f"{function.gettime()}: Found encrypted images from {chapterUrl}.\n")
         capturing = captureImg(chapterUrl, chapterNumber, chapterPath, debug, savejson, log, logFile, notDown)
     else:
         print(f"{function.gettime()}: No encrypted images detected.")
+        if log:
+            function.writeFile(logFile, f"{function.gettime()}: No encrypted images detected in {chapterUrl}.\n")
         # Find images
         imgList = findImg(soup)
-        print(f"{function.gettime()}: Found {len(imgList)} images.")
+        print(f"{function.gettime()}: Found {len(imgList)} images from {chapterUrl}.")
+        if log:
+            function.writeFile(logFile, f"{function.gettime()}: Found {len(imgList)} images from {chapterUrl}.\n")
         
-        # Check and validate existing images
-        for img_file in os.listdir(chapterPath):
-            imgPath = os.path.join(chapterPath, img_file)
-            if not function.checkImg(imgPath):
-                print(f"{function.gettime()}: ⚠️ Invalid or corrupt image found: {imgPath}, deleting...")
-                os.remove(imgPath)
-                print(f"{function.gettime()}: Deleted {imgPath} images.")
-        
-        # Check existing images
-        imgExist = function.countFiles(chapterPath)
-        if len(imgList) == imgExist:
-            print(f"{function.gettime()}: ✅ Already downloaded this chapter.")
-            return None
-        
-        print(f"{function.gettime()}: inititializing to downlad image list.")
+        print(f"{function.gettime()}: inititializing to downlad image list from {chapterUrl}.")
+        if log:
+            function.writeFile(logFile, f"{function.gettime()}: inititializing to downlad image list from {chapterUrl}.\n")
         workers = iThread
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
             future_to_image = {}  # Dictionary to track futures
             for i, imgUrl in enumerate(imgList):
+                print(f"{function.gettime()}: 🏁 Submitting image {i + 1}/{len(imgList)} -> {imgUrl}")
+                if log:
+                    function.writeFile(logFile, f"{function.gettime()}: 🏁 Submitting chapter {i + 1}/{len(imgList)} -> {imgUrl}\n")
+                    
                 future = executor.submit(dlImg, i, imgUrl, chapterNumber, chapterUrl, chapterPath, debug, log, logFile, notDown)
                 future_to_image[future] = imgUrl
                 
@@ -468,22 +526,29 @@ def processChapter(chapterUrl, chapterTitle, chapterNumber, mgFolder, iThread, d
                 imgUrl = future_to_image[future]
                 try:
                     future.result()  # This raises any exceptions that occurred in the thread
-                    print(f"{function.gettime()}: ✅ Successfully downloaded image: {imgUrl}")
                 except Exception as e:
                     print(f"{function.gettime()}: ❌ Error downloading image: {imgUrl}: {e}")
+                    if log:
+                        function.writeFile(logFile, f"{function.gettime()}: ❌ Error downloading image: {imgUrl}\n")
         
         # Check downloaded image files
         countDown = function.countFiles(chapterPath)
         if len(imgList) != countDown:
             print(f"{function.gettime()}: ⚠️ Image count mismatch: {countDown} / {len(imgList)}.")
+            if log:
+                function.writeFile(logFile, f"{function.gettime()}: ⚠️ Image count mismatch: {countDown} / {len(imgList)}.\n")
             function.writeFile(notDown, f"{chapterUrl}\n")
         else:
             print(f"{function.gettime()}: ✅ Image count match: {countDown} / {len(imgList)}.")
+            if log:
+                function.writeFile(logFile, f"{function.gettime()}: ✅ Image count match: {countDown} / {len(imgList)}.\n")
             
             # Save JSON data
             if savejson is True:
                 function.savejson(jsonFile, chaptertitle=chapterTitle, chapterurl=chapterUrl)
                 print(f"{function.gettime()}: 💾 JSON data updated to {jsonFile}.")
+                if log:
+                    function.writeFile(logFile, f"{function.gettime()}: 💾 JSON data updated to {jsonFile}.\n")
 
     return None
 
@@ -565,17 +630,30 @@ def findImg(soup):
 
 def dlImg(i, imgUrl, chapterNumber, chapterUrl, chapterPath, debug, log, logFile, notDown):
     print(f"{function.gettime()}: ⏳ Downloading image {imgUrl}...")
+    excludeFile = "excludedomain.txt"
 
     # Check internet connection
-    function.waitNet()
+    #function.waitNet()
 
     notDownList = function.readFile(notDown) if os.path.exists(notDown) else []
+    excludeDomains = function.readFile(excludeFile) if os.path.exists(excludeFile) else []
+    
+    domain = urllib.parse.urlparse(imgUrl).netloc
+    domain = domain.replace('www.', '')
+    
+    if domain in excludeDomains:
+        print(f"{function.gettime()}: ⚠️ Excluding domain: {domain}")
+        if log:
+            function.writeFile(logFile, f"{function.gettime()}: ⚠️ Excluding domain: {domain}\n")
+        if chapterUrl not in notDownList:
+            function.writeFile(notDown, f"{chapterUrl}\n")
+        return None
 
     # Fix URLs missing scheme
     if imgUrl.startswith('//'):
         imgUrl = 'https:' + imgUrl
         if log:
-            function.writeFile(logFile, f"{function.gettime()}: ⚠️ Added 'https:' to image link.")
+            function.writeFile(logFile, f"{function.gettime()}: ⚠️ Added 'https:' to image link.\n")
 
     # Fix domain name change
     imgUrl = imgUrl.replace("manga168.com", "manga168.net")
@@ -584,11 +662,13 @@ def dlImg(i, imgUrl, chapterNumber, chapterUrl, chapterPath, debug, log, logFile
     fileExtension = os.path.splitext(imgUrl)[1]
     if fileExtension == '.webppng':
         imgUrl = imgUrl.replace(".webppng", ".webp")
+        if log:
+            function.writeFile(logFile, f"{function.gettime()}: ⚠️ Changed the url to {imgUrl}.\n")
 
     if not fileExtension:
         print(f"{function.gettime()}: ⚠️ No file extension found for {imgUrl}.")
         if log:
-            function.writeFile(logFile, f"{function.gettime()}: ⚠️ No file extension for {imgUrl}.")
+            function.writeFile(logFile, f"{function.gettime()}: ⚠️ No file extension for {imgUrl}.\n")
         if chapterUrl not in notDownList:
             function.writeFile(notDown, f"{chapterUrl}\n")
         return None
@@ -603,16 +683,20 @@ def dlImg(i, imgUrl, chapterNumber, chapterUrl, chapterPath, debug, log, logFile
         isValid = function.checkImg(imgPath)
         if isValid == True:
             print(f"{function.gettime()}: ✅ Downloaded and verified: {imgUrl}")
+            if log:
+                function.writeFile(logFile, f"{function.gettime()}: ✅ Downloaded and verified:  {imgUrl}.\n")
             return
         else:
             print(f"{function.gettime()}: ⚠️ Image is corrupt or incomplete, retrying...")
+            if log:
+                function.writeFile(logFile, f"{function.gettime()}: ⚠️ Image is corrupt or incomplete, retrying:  {imgUrl}.\n")
             os.remove(imgPath)
     # Download image with retry, timeout, and progress bar
     retries = 6
     for attempt in range(retries):
-        function.waitNet()  # Re-check internet before retry
+        #function.waitNet()  # Re-check internet before retry
         try:
-            response = rq.get(imgUrl, headers=getHeaders(), stream=True, timeout=60)
+            response = rq.get(imgUrl, headers=getHeaders(), stream=True, timeout=300)
             response.raise_for_status()
             
             total_length = int(response.headers.get('Content-Length', 0))
@@ -631,27 +715,67 @@ def dlImg(i, imgUrl, chapterNumber, chapterUrl, chapterPath, debug, log, logFile
                             f.write(chunk)
 
             # Validate the downloaded image
+            localSize = os.path.getsize(imgPath)
             isValid = function.checkImg(imgPath)
-            if isValid == True:
-                print(f"{function.gettime()}: ✅ Downloaded and verified: {imgUrl}")
-                return
+            checkSize = function.compareSize(int(total_length), int(localSize))
+            if int(total_length) > 0:
+                if isValid == True and checkSize == True:
+                    print(f"{function.gettime()}: ✅ Downloaded and verified: {imgUrl} => {imgName}")
+                    if log:
+                        function.writeFile(logFile, f"{function.gettime()}: ✅ Downloaded and verified: {imgUrl} => {imgName}.\n")
+                    return
+                else:
+                    print(f"{function.gettime()}: ⚠️ Image is corrupt or incomplete, retrying...")
+                    if log:
+                        function.writeFile(logFile, f"{function.gettime()}: ⚠️ Image is corrupt or incomplete, retrying:  {imgUrl}.\n")
+                    if os.path.exists(imgPath):
+                        os.remove(imgPath)
             else:
-                print(f"{function.gettime()}: ⚠️ Image is corrupt or incomplete, retrying...")
-                os.remove(imgPath)
+                if isValid == True:
+                    print(f"{function.gettime()}: ✅ Downloaded and verified: {imgUrl} => {imgName}")
+                    if log:
+                        function.writeFile(logFile, f"{function.gettime()}: ✅ Downloaded and verified: {imgUrl} => {imgName}.\n")
+                    return
+                else:
+                    print(f"{function.gettime()}: ⚠️ Image is corrupt or incomplete, retrying...")
+                    if log:
+                        function.writeFile(logFile, f"{function.gettime()}: ⚠️ Image is corrupt or incomplete, retrying:  {imgUrl}.\n")
+                    if os.path.exists(imgPath):
+                        os.remove(imgPath)
 
         except rq.exceptions.HTTPError as e:
             if response.status_code == 403:
                 print(f"{function.gettime()}: 🔴 403 Forbidden! Retrying with new headers...")
+                if log:
+                    function.writeFile(logFile, f"{function.gettime()}: 🔴 403 Forbidden! Retrying with new headers:  {imgUrl}.\n")
+                if os.path.exists(imgPath):
+                    os.remove(imgPath)
+                return None
+            elif response.status_code == 404:
+                print(f"{function.gettime()}: 🔴 404 Not Found!")
+                if log:
+                    function.writeFile(logFile, f"{function.gettime()}: 🔴 404 Not Found! Retrying:  {imgUrl}.\n")
+                if os.path.exists(imgPath):
+                    os.remove(imgPath)
+                return None
             else:
                 print(f"{function.gettime()}: ❌ HTTP error: {e}")
+                if log:
+                    function.writeFile(logFile, f"{function.gettime()}: ❌ HTTP error: {e}.\n")
+                if os.path.exists(imgPath):
+                    os.remove(imgPath)
 
         except rq.exceptions.RequestException as e:
             print(f"{function.gettime()}: ❌ Attempt {attempt+1} failed: {e}")
+            if log:
+                function.writeFile(logFile, f"{function.gettime()}: ❌ Attempt {attempt+1} failed: {e}.\n")
 
         # Exponential backoff before retrying
-        time.sleep(2 ** attempt)
+        time.sleep(1 ** attempt)
 
     print(f"{function.gettime()}: ❌ All retry attempts failed for {imgUrl}")
+    if log:
+        function.writeFile(logFile, f"{function.gettime()}: ❌ All retry attempts failed for {imgUrl}.\n")
     if chapterUrl not in notDownList:
         function.writeFile(notDown, f"{chapterUrl}\n")
     return None
@@ -677,7 +801,7 @@ def captureImg(chapterUrl, chapterNumber, chapterPath, debug, savejson, log, log
     
     for attempt in range(maxRetires):
         try:
-            function.waitNet()
+            #function.waitNet()
             
             driver = webdriver.Chrome(options=options)
             driver.set_page_load_timeout(30)
@@ -693,7 +817,7 @@ def captureImg(chapterUrl, chapterNumber, chapterPath, debug, savejson, log, log
             
             break
         except Exception as e:
-            print(f"{function.gettime()}: �� WebDriver error: {e}")
+            print(f"{function.gettime()}: ❌ WebDriver error: {e}")
             attempt += 1
             time.sleep(5)
             
