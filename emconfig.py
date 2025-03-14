@@ -23,9 +23,9 @@ def config(section_id):
                 "สถานะมังงะ"
             ],
             "chapterlist": [
-                "div.listing-chapters_wrap ul",
-                "div#chapterlist ul",
-                "ul.main",
+                "div.listing-chapters_wrap ul li",
+                "div#chapterlist ul li",
+                "ul.main li",
                 "ul#chapterList"
             ],
             "cover": ["div.summary_image a img"]

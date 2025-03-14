@@ -6,6 +6,8 @@ import random
 import emconfig
 import datetime
 import function
+from io import BytesIO
+from PIL import Image
 import urllib.parse
 import requests as rq
 from tqdm import tqdm
@@ -165,7 +167,7 @@ def findData(soup, selectors, multiple=False):
             # If selector appears to be a CSS selector
             elements = soup.select(selector)
             if elements:
-                if multiple:  
+                if multiple:
                     return [element.text.strip() for element in elements if element.text.strip()]
                 return elements[0].text.strip() if elements[0].text.strip() else elements[0].get("src", "").strip()
         else:
@@ -174,6 +176,12 @@ def findData(soup, selectors, multiple=False):
             if heading:
                 content_div = heading.find_next("div", class_="summary-content")
                 if content_div:
+                    if multiple:
+                        # Extract text from all <a> tags if they exist
+                        genre_links = content_div.find_all("a")
+                        if genre_links:
+                            return [genre.text.strip() for genre in genre_links if genre.text.strip()]
+                        return content_div.text.strip().split(", ")  # Fallback to splitting by commas
                     return content_div.text.strip()
     return results if multiple else "N/A"  # Return empty list if multiple, otherwise "N/A"
 
@@ -372,11 +380,14 @@ def fetchInfo(url, start, end, output, wThread, iThread, listchapter, nocover, d
     print("Total Chapters: ", len(mangaData["chapterlist"]))
     print("Total Download Count: ", len(chapterList))
     
-    if listchapter is True and (start is None or end is None):
+    if listchapter is True:
+        start = start if start is not None else 1
+        end = end if end is not None else len(mangaData["chapterlist"])
         print("Chapters:")
-        for i, chapter in enumerate(mangaData["chapterlist"]):
-            print(f"{i+1} - {chapter['title']} | URL: {chapter['url']}")
-        print(f"Total Chapters: {len(mangaData['chapterlist'])}")
+        for i in range(len(chapterList)):
+            chapterList[i]["title"] = chapterList[i]["title"]
+            print(f"{i+1} - {chapterList[i]['title']} | URL: {chapterList[i]['url']}")
+        print(f"Chapters: {start} - {end} / Total: {len(mangaData['chapterlist'])}")
         exit(0)
     else:
         start = start if start is not None else 1
@@ -496,7 +507,7 @@ def processChapter(chapterUrl, chapterTitle, chapterNumber, mgFolder, iThread, d
         print(f"{function.gettime()}: Found encrypted images from {chapterUrl}.")
         if log:
             function.writeFile(logFile, f"{function.gettime()}: Found encrypted images from {chapterUrl}.\n")
-        capturing = captureImg(chapterUrl, chapterNumber, chapterPath, debug, savejson, log, logFile, notDown)
+        captureImg(chapterUrl, chapterNumber, chapterPath, debug, savejson, log, logFile, notDown)
     else:
         print(f"{function.gettime()}: No encrypted images detected.")
         if log:
@@ -557,6 +568,7 @@ def detectEncrypt(soup):
     if soup.find(style=re.compile(r"background-image:\s*url\((.*?)\)")):
         print(f"{function.gettime()}: ⚠️ Tiled background images detected!")
         return True
+    
     # Check for Encrypted Canvas Images
     for canvas in soup.find_all("canvas"):
         if canvas.get("data-url"):  # Direct reference in the attribute
@@ -564,34 +576,45 @@ def detectEncrypt(soup):
             return True
         print(f"{function.gettime()}: ⚠️ Encrypted canvas image detected (JS-processed).")
         return True
-    # Check for JavaScript-Obfuscated Images
+
+    # Check for JavaScript-Obfuscated Images (eval function obfuscation)
     if re.search(r"eval\(function\(p,a,c,k,e,d\)", soup.text):
         print(f"{function.gettime()}: ⚠️ JavaScript-obfuscated image detected!")
         return True
-    
+
+    # Check for DisplayImage divs with no direct <img> tag (likely JS-rendered images)
+    for div in soup.find_all("div", class_="displayImage"):
+        if not div.find("img") and "style" in div.attrs:
+            print(f"{function.gettime()}: ⚠️ Hidden images detected in 'displayImage' div.")
+            return True
+
     print(f"{function.gettime()}: ✅ No encrypted images detected.")
     return False
 
 def checkJson(soup):
-    print(f"{function.gettime()}: Trying to find images from json script...")
+    print(f"{function.gettime()}: 🔎 Trying to find images from json script...")
     # Check if json script exists
     jsonScript = soup.find("script", string=re.compile(r'ts_reader\.run'))
-    pattern = r'ts_reader\.run\((.+?)\)'
-    match = re.search(pattern, jsonScript.string)
-    if match:
-        # Fix if string has compressed
-        jsonText = match.group(1)
-        jsonText = re.sub(r'!1', 'true', jsonText)
-        jsonText = re.sub(r'!0', 'false', jsonText)
-        jsonData = json.loads(jsonText)
-        
-        # Check if images exist
-        if 'sources' in jsonData and len(jsonData['sources']) > 0:
-            return jsonData['sources'][0].get('images', [])
+    if not jsonScript:
+        print(f"{function.gettime()}: ❌ No json script found.")
+        return []
+    else:
+        pattern = r'ts_reader\.run\((.+?)\)'
+        match = re.search(pattern, jsonScript.string)
+        if match:
+            # Fix if string has compressed
+            jsonText = match.group(1)
+            jsonText = re.sub(r'!1', 'true', jsonText)
+            jsonText = re.sub(r'!0', 'false', jsonText)
+            jsonData = json.loads(jsonText)
+            
+            # Check if images exist
+            if 'sources' in jsonData and len(jsonData['sources']) > 0:
+                return jsonData['sources'][0].get('images', [])
     return []
 
 def checkReaddiv(soup):
-    print(f"{function.gettime()}: Trying to find images from read div...")
+    print(f"{function.gettime()}: 🔎 Trying to find images from read div...")
 
     # Possible reader div selectors
     readDivs = [
@@ -785,19 +808,19 @@ def captureImg(chapterUrl, chapterNumber, chapterPath, debug, savejson, log, log
     options = Options()
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-infobars")
+    options.add_argument("--window-size=900,1200")
     options.add_argument("--disable-extensions")
     options.add_argument("--disable-web-security")
     options.add_argument("--allow-running-insecure-content")
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_argument("--disable-blink-features=BlockCredentialedSubresources")
     options.add_argument(f"user-agent={getUG()}")
-    options.add_argument("user-data-dir=Z:/Scrapy/Chrome/profile")
     
     prefs = {"profile.default_content_setting_values.cookies": 1}
     options.add_experimental_option("prefs", prefs)
     
     attempt = 0
-    maxRetires = 6
+    maxRetires = 3
     
     for attempt in range(maxRetires):
         try:
@@ -806,26 +829,67 @@ def captureImg(chapterUrl, chapterNumber, chapterPath, debug, savejson, log, log
             driver = webdriver.Chrome(options=options)
             driver.set_page_load_timeout(30)
             driver.get(chapterUrl)
-            bodyDiv = WebDriverWait(driver, 5).until(
+            WebDriverWait(driver, 5).until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, "body"))
             )
-            windowSize(driver)
-            time.sleep(1)
-            ranMouse(driver)
-            time.sleep(2)
-            
-            
+            readDiv = getReadDiv(driver)
+            if readDiv:
+                rmElements(driver, readDiv)
+                print("Remove unnecessary elements.")
+                time.sleep(1)
+                windowSize(driver)
+                print("Resize window size")
+                time.sleep(0.5)
+                ranMouse(driver)
+                print("Random mouse")
+                time.sleep(1)
+                scrollCheckHeight(driver)
+                print("Check scroll height")
+                time.sleep(0.5)
+                
+                # Scroll to top of page
+                driver.execute_script("window.scrollTo(0, 0)")
+                time.sleep(0.5)
+                
+                # **Wait for all images to load before capturing**
+                chapturing(driver, readDiv, chapterNumber, chapterPath, log, logFile)
+                
             break
         except Exception as e:
             print(f"{function.gettime()}: ❌ WebDriver error: {e}")
             attempt += 1
-            time.sleep(5)
-            
+            time.sleep(3)
+            driver.quit()
+    driver.quit()
+
+def getReadDiv(driver):
+    print(f"{function.gettime()}: Finding read element from page.")
+    
+    # Possible reader div selectors
+    readDivs = [
+        "div#readerarea",
+        "div.reader-area",
+        "div.reader-area-main",
+        "div.reading-content",
+    ]
+    
+    for div in readDivs:
+        try:
+            driver.find_element(By.CSS_SELECTOR, div)  # Just check if it exists
+            print(f"{function.gettime()}: ✅ Read element found: {div}")
+            return div  # Return the selector string, not the element
+        except Exception:
+            continue
+    
+    print(f"{function.gettime()}: ❌ No read element found.")
+    return None  # Return None if no element is found
+
 def ranMouse(driver):
+    print("Randomly moving mouse...")
     # Get the browser window size
     window_size = driver.get_window_size()
-    max_x = window_size['width']
-    max_y = window_size['height']
+    max_x = window_size['width'] - 100
+    max_y = window_size['height'] - 100
 
     # Generate random coordinates
     x = random.randint(0, max_x)
@@ -839,6 +903,7 @@ def ranMouse(driver):
     time.sleep(0.5)
     
 def windowSize(driver):
+    print("Resizing window size...")
     # Get the current window size
     current_size = driver.get_window_size()
 
@@ -848,7 +913,7 @@ def windowSize(driver):
 
     # Set the new window size
     driver.set_window_size(width, height)
-    time.sleep(1)
+    time.sleep(0.5)
 
     # Get the current window size
     current_size = driver.get_window_size()
@@ -859,8 +924,9 @@ def windowSize(driver):
 
     # Set the new window size
     driver.set_window_size(width, height)
-    
-def rmElements(driver, readdiv):
+
+def rmElements(driver, readDiv):
+    print("Removing elements...")
     try:
         # Wait until the document.readyState is 'complete'
         WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, 'body')))
@@ -870,7 +936,7 @@ def rmElements(driver, readdiv):
 
     try:
         # Wait for the div to be present
-        target = driver.find_element(By.CSS_SELECTOR, readdiv)
+        target = driver.find_element(By.CSS_SELECTOR, readDiv)
     except Exception as e:
         print(f"Error: {e}")
         return None
@@ -918,11 +984,12 @@ def rmElements(driver, readdiv):
     # Set width to auto for specified images
     driver.execute_script("""
         var windowWidth = window.innerWidth + 'px';
-        var container = document.querySelectorAll('.container, #content, .wrapper, .postarea');
+        var container = document.querySelectorAll('.container, #content, .wrapper, .postarea, .reading-content, .read-container, .entry-content_wrap, .main-col-inner');
         container.forEach(function(div) {
             div.style.width = windowWidth;
             div.style.margin = 'unset';
             div.style.padding = 'unset';
+            div.style.lineHeight = 'unset';
         });
     """)
 
@@ -936,8 +1003,90 @@ def rmElements(driver, readdiv):
     """)
 
     driver.execute_script("""
-        var container = document.querySelectorAll('.scrollToTop');
+        var container = document.querySelectorAll('.scrollToTop, #text-chapter-toolbar');
         container.forEach(function(div) {
             div.style.opacity = '0';
+            div.style.display = 'none';
         });
     """)
+
+def scrollCheckHeight(driver):
+    print("Checking height of element...")
+    height = driver.execute_script("return document.body.scrollHeight;")
+    
+    # Scroll down until the height no longer changes
+    while True:
+        driver.execute_script(f"window.scrollBy(0, {height});")
+        #ranMouse(driver)
+        time.sleep(2)
+        
+        # Calculate the new total height
+        newHeight = driver.execute_script("return document.body.scrollHeight;")
+        
+        if newHeight == height:
+            break
+        
+        height = newHeight
+
+def chapturing(driver, readDiv, chapterNumber, chapterPath, log, logFile):
+    # Make folder to save the images
+    if not os.path.exists(chapterPath):
+        os.makedirs(chapterPath)
+
+    # Get page dimensions
+    total_height = driver.execute_script("return document.documentElement.scrollHeight")
+    viewport_width = driver.execute_script("return document.documentElement.scrollWidth")
+    viewport_height = driver.execute_script("return window.innerHeight")
+
+    # Scroll & capture screenshots separately
+    scroll_y = 0
+    screenshot_count = 1
+
+    while scroll_y + viewport_height < total_height:  # Capture full viewport sections first
+        driver.execute_script(f"window.scrollTo(0, {scroll_y})")
+        time.sleep(0.5)  # Allow content to load properly
+
+        # Capture screenshot
+        screenshot = driver.get_screenshot_as_png()
+        img = Image.open(BytesIO(screenshot))
+
+        # Save each section separately
+        image_path = os.path.join(chapterPath, f"Chapter-{chapterNumber}_image_{screenshot_count}.png")
+        img.save(image_path)
+        print(f"Saved: {image_path}")
+
+        # Move to the next section
+        scroll_y += viewport_height
+        screenshot_count += 1
+
+    # **Fix: Resize window for the last section**
+    remaining_height = total_height - scroll_y  # Only capture what's left
+    if remaining_height > 0:
+        driver.set_window_size(viewport_width, remaining_height)  # Resize window to fit last part
+        driver.execute_script(f"window.scrollTo(0, {scroll_y})")
+        time.sleep(1)
+
+        screenshot = driver.get_screenshot_as_png()
+        img = Image.open(BytesIO(screenshot))
+        image_path = os.path.join(chapterPath, f"Chapter-{chapterNumber}_image_{screenshot_count}.png")
+        img.save(image_path)
+        print(f"✅ Final capture saved (resized window): {image_path}")
+
+    print(f"✅ Chapter {chapterNumber} screenshots saved in {chapterPath}")
+
+    # Restore window size after capturing
+    driver.set_window_size(viewport_width, viewport_height)
+
+def waitForImages(driver, readDiv, timeout=60):
+    """
+    Waits until all images inside `readDiv` are fully loaded.
+    """
+    try:
+        WebDriverWait(driver, timeout).until(
+            lambda d: all(img.get_attribute("complete") == "true" for img in d.find_elements(By.CSS_SELECTOR, f"{readDiv} img"))
+        )
+        print("✅ All images loaded successfully!")
+        return True
+    except Exception:
+        print("⚠️ Timeout: Some images may not have loaded completely.")
+        return False
