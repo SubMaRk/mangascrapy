@@ -9,11 +9,12 @@ Manga Scraper CLI is a command-line tool designed to download manga series, indi
 All supported sites use templates from:
 - [Themesia](https://themesia.com/)
 - [Mangabooth](https://mangabooth.com/)
-
+Another system
+- [Niceoppai](https://www.niceoppai.net/)
 ---
 
 ## Bugs
-Currently, encrypted images on reading pages are unsupported.
+Currently, encrypted images on reading pages at Niceoppai are unsupported.
 
 ---
 
