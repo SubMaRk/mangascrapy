@@ -66,7 +66,7 @@ def bssoup(url, log, logfile, max_retries=5):
 
 def selenium(url, log, logfile, max_retries=5):
     options = Options()
-    options.add_argument("--headless")
+    #options.add_argument("--headless")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-infobars")
     options.add_argument("--disable-extensions")
@@ -85,6 +85,7 @@ def selenium(url, log, logfile, max_retries=5):
         try:
             driver = webdriver.Chrome(options=options)
             driver.get(url)
+            time.sleep(5)
 
             # Wait until the entire page loads
             WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
@@ -115,6 +116,26 @@ def selenium(url, log, logfile, max_retries=5):
     if log:
         function.writeFile(logfile, text)
     return None
+
+def cfDetect(chapterUrl, log, logFile):
+    """Find manga series links on the page, handling Cloudflare bot check."""
+    soup = None
+    try:
+        soup = bssoup(chapterUrl, log, logFile)
+        title = soup.title.string.strip() if soup.title else ""
+        if title.lower() == "just a moment...":
+            print("⚠️ CloudFlare Bot Challenge detected")
+            function.writeFile(logFile, f"{function.gettime()}: ⚠️ CloudFlare Bot Challenge detected.\n")
+            raise ValueError("Bot protection detected")
+    except Exception as e:
+        print(f"⚙️ Falling back to Selenium: {e}")
+        function.writeFile(logFile, f"{function.gettime()}: ⚙️ Falling back to Selenium: {e}\n")
+        soup = selenium(chapterUrl, log, logFile)
+        
+    if soup:
+        return soup
+    else:
+        return None
 
 def find_section(url, soup, log, logpath):
     print(f"{function.gettime()}: Finding section from {url}...")
@@ -185,35 +206,78 @@ def findData(soup, selectors, multiple=False):
                     return content_div.text.strip()
     return results if multiple else "N/A"  # Return empty list if multiple, otherwise "N/A"
 
-def extractChapters(soup, selectors):
-    """Extract all chapters from the manga page and sort them properly."""
-    for selector in selectors:
-        chapter_list = soup.select(selector + ", " + selector + " a")  # Support different structures
-        if chapter_list:
-            chapters = []
-            for chapter in chapter_list:
-                chapter_link = chapter.find("a")
-                if chapter_link:
-                    first_span = chapter_link.find("span", recursive=False)  # Get only the first-level <span>
-                    if first_span:
-                        # Remove any nested span content
-                        for nested in first_span.find_all("span"):
-                            nested.extract()
-                        chapter_title = first_span.get_text(strip=True)  # Extract clean text without sub-spans
-                    else:
-                        chapter_title = chapter_link.get_text(strip=True)  # Fallback to full <a> text
+def extractChapters(soup, selectors, log, logFile, base_url=None):
+    """Auto-detects multipage chapters and extracts all chapters."""
 
-                    chapter_url = urllib.parse.unquote(chapter_link["href"])
-                    chapters.append({"url": chapter_url, "title": chapter_title})
-            return sorted(chapters, key=lambda x: function.sortKey(x['title']))
-    return []
+    def get_total_pages(soup):
+        pages = soup.select("ul.pgg li a")
+        last_page = 1
+        for a in pages:
+            if a.text.strip().isdigit():
+                last_page = max(last_page, int(a.text.strip()))
+        return last_page
 
-def extractData(soup, config):
+    def extract_from_soup(soup, selectors):
+        chapters = []
+        for selector in selectors:
+            chapter_list = soup.select(selector + ", " + selector + " a")
+            if chapter_list:
+                for chapter in chapter_list:
+                    chapter_link = chapter.find("a")
+                    if chapter_link:
+                        # ✅ Prefer <b class="val"> for title (cleanest)
+                        val_tag = chapter_link.find("b", class_="val")
+                        if val_tag:
+                            chapter_title = val_tag.get_text(strip=True)
+                        else:
+                            # ✅ Fallback to <a> tag text, but strip unwanted child tags like .ttl and .dte
+                            for unwanted in chapter_link.select("b.ttl, b.dte"):
+                                unwanted.decompose()  # remove the tag from the tree
+                                
+                            first_span = chapter_link.find("span", recursive=False)
+                            if first_span:
+                                for nested in first_span.find_all("span"):
+                                    nested.extract()
+                                chapter_title = first_span.get_text(strip=True)
+                            else:
+                                chapter_title = chapter_link.get_text(strip=True)
+
+                        chapter_url = urllib.parse.unquote(chapter_link.get("href", ""))
+                        chapters.append({
+                            "url": chapter_url,
+                            "title": chapter_title
+                        })
+                break
+        return chapters
+
+    # Step 1: Detect if there are multiple pages
+    all_chapters = extract_from_soup(soup, selectors)
+    total_pages = get_total_pages(soup)
+
+    # If multipage and base_url provided, loop through all pages
+    if total_pages > 1 and base_url:
+        for page in range(2, total_pages + 1):
+            page_url = f"{base_url.rstrip('/')}/chapter-list/{page}/"
+            print(f"Fetching page {page}: {page_url}")
+            try:
+                next_soup = bssoup(page_url, log, logFile)
+                if not next_soup:
+                    next_soup = selenium(page_url, log, logFile)
+                    
+                chapters = extract_from_soup(next_soup, selectors)
+                all_chapters.extend(chapters)
+                time.sleep(0.5)  # Be polite
+            except Exception as e:
+                print(f"Failed to fetch page {page}: {e}")
+
+    return sorted(all_chapters, key=lambda x: function.sortKey(x['title']))
+
+def extractData(soup, config, log, logFile, url):
     """Extract manga data based on provided configuration."""
     manga_data = {}
     for key, selectors in config.items():
         if key == "chapterlist":
-            manga_data[key] = extractChapters(soup, selectors)
+            manga_data[key] = extractChapters(soup, selectors, log, logFile, url)
         elif key == "cover":
             manga_data[key] = findData(soup, selectors)  # Extract image URL
         elif key == "genre":
@@ -280,13 +344,13 @@ def fetchInfo(url, start, end, output, wThread, iThread, listchapter, nocover, d
         cprList = function.readFile(cprFile)
         if url in cprList:
             print(f"{function.gettime()}: ⚠️ The series has been copyrighted in Thailand. Skipping...")
-            return
+            exit(1)
     
     if os.path.exists(htFile):
         hentaiList = function.readFile(htFile)
         if url in hentaiList:
             print(f"{function.gettime()}: ⚠️ The series is Hentai. Skipping...")
-            return
+            exit(1)
         
     url = function.safeDecode(url)
     
@@ -351,7 +415,7 @@ def fetchInfo(url, start, end, output, wThread, iThread, listchapter, nocover, d
     print(f"{function.gettime()}: Fetching information from url: {url}...")
     if log:
         function.writeFile(logFile, f"{function.gettime()}: Fetching information from url: {url}...\n")
-    mangaData = extractData(section, config)
+    mangaData = extractData(section, config, log, logFile, url)
     
     if len(mangaData["chapterlist"]) == 0:
         print(f"{function.gettime()}: No chapters found. Exiting...")
@@ -467,8 +531,11 @@ def fetchInfo(url, start, end, output, wThread, iThread, listchapter, nocover, d
             chapterNumber = function.getchapter(str(chapterTitle))
             if not chapterNumber:
                 mgID = function.mangaID(url)
-                chID = function.mangaID(chapter)
-                chapterNumber = function.numChapter(mgID, chID)
+                chID = function.mangaID(chapterUrl)
+                if mgID and chID:
+                    chapterNumber = function.numChapter(mgID, chID)
+                else:
+                    chapterNumber = i
 
             print(f"{function.gettime()}: 🏁 Submitting chapter {i + 1}/{len(chapterList)} -> {chapterUrl}")
             if log:
@@ -497,7 +564,12 @@ def fetchInfo(url, start, end, output, wThread, iThread, listchapter, nocover, d
             function.writeFile(linkFile, f"{url}\n")
 
 def processChapter(chapterUrl, chapterTitle, chapterNumber, mgFolder, iThread, debug, savejson, log, logFile, notDown, jsonFile=None):
-    soup = bssoup(chapterUrl, log, logFile)
+    cfCheck = cfDetect(chapterUrl, log, logFile)
+    if cfCheck is not None:
+        soup = cfCheck
+    else:
+        exit(1)
+        
     chapterFolder = f"Chapter-{chapterNumber}"
     chapterPath = os.path.join(mgFolder, chapterFolder)
     function.mkDir(chapterPath)
@@ -622,6 +694,7 @@ def checkReaddiv(soup):
         "div.reader-area",
         "div.reader-area-main",
         "div.reading-content",
+        "div#image-container"
     ]
 
     for selector in readDivs:
