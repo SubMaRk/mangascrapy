@@ -48,7 +48,7 @@ def writeFile(path, content):
         
 def readFile(path):
     with open(path, "r", encoding='utf8') as file:
-        return file.readlines()
+        return [line.rstrip('\n') for line in file]
 
 def countFiles(path):
     files = os.listdir(path)
