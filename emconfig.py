@@ -63,3 +63,23 @@ def config(section_id):
                 ".series-thumb img"
             ]
         }
+    elif section_id == 6:
+        return {
+            "title": [
+                "h1.ttl",
+            ],
+            "type": [
+            ],
+            "genre": [
+                "p:has(b:-soup-contains('หมวดหมู่')) a",
+            ],
+            "status": [
+                "p:has(b:-soup-contains('สถานะ'))",
+            ],
+            "chapterlist": [
+                "ul.lst > li",
+            ],
+            "cover": [
+                ".cvr_ara img",
+            ]
+        }
