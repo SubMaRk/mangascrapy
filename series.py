@@ -6,6 +6,7 @@ import random
 import emconfig
 import datetime
 import function
+import certifi
 from io import BytesIO
 from PIL import Image
 import urllib.parse
@@ -21,6 +22,16 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.action_chains import ActionChains
+
+DOMAIN_SSL_POLICY = {
+    "speed-manga.com": False,
+}
+
+FORCE_IMG_ENCRYPT = {
+    "manga1668.com": True,
+    "rom-manga.com": True,
+    "toonhunter.com": True,
+}
 
 def randomUG():
     all_user_agents = latest_user_agents.get_latest_user_agents()
@@ -43,14 +54,20 @@ def getHeaders():
         "Sec-Fetch-Mode": "navigate",
         "Sec-Fetch-Site": "same-origin",
         "Sec-Fetch-User": "?1",
-        "Content-Type": "text/html; charset=UTF-8"
+        "Content-Type": "text/html; charset=UTF-8",
     }
 
 def bssoup(url, log, logfile, max_retries=5):
+    parsed_url = urllib.parse.urlparse(url)
+    domain = parsed_url.hostname
+    
+    # Default to True if domain not specified
+    verify_ssl = DOMAIN_SSL_POLICY.get(domain, True)
+    verify_param = certifi.where() if verify_ssl else False
     for _ in range(max_retries):
         try:
             headers = getHeaders()
-            response = rq.get(url, headers=headers)
+            response = rq.get(url, headers=headers, verify=verify_param)
             soup = bs(response.content, 'html.parser')
             text = f"{function.gettime()}: ✅ Successfully fetched page: {url}\n"
             if log:
@@ -575,11 +592,28 @@ def processChapter(chapterUrl, chapterTitle, chapterNumber, mgFolder, iThread, d
     function.mkDir(chapterPath)
     
     # Check images elements have been existing
-    if detectEncrypt(soup) is True:
+    if detectEncrypt(soup, chapterUrl) is True:
         print(f"{function.gettime()}: Found encrypted images from {chapterUrl}.")
         if log:
             function.writeFile(logFile, f"{function.gettime()}: Found encrypted images from {chapterUrl}.\n")
-        captureImg(chapterUrl, chapterNumber, chapterPath, debug, savejson, log, logFile, notDown)
+        status = captureImg(chapterUrl, chapterNumber, chapterPath, debug, savejson, log, logFile, notDown)
+        
+        if status is False:
+            print(f"{function.gettime()}: ⚠️ Image count mismatch, please try it again.")
+            if log:
+                function.writeFile(logFile, f"{function.gettime()}: ⚠️ Image count mismatch, Image count mismatch, please try it again.\n")
+            function.writeFile(notDown, f"{chapterUrl}\n")
+        else:
+            print(f"{function.gettime()}: ✅ Image count matched.")
+            if log:
+                function.writeFile(logFile, f"{function.gettime()}: ✅ Image count matched.\n")
+            
+            # Save JSON data
+            if savejson is True:
+                function.savejson(jsonFile, chaptertitle=chapterTitle, chapterurl=chapterUrl)
+                print(f"{function.gettime()}: 💾 JSON data updated to {jsonFile}.")
+                if log:
+                    function.writeFile(logFile, f"{function.gettime()}: 💾 JSON data updated to {jsonFile}.\n")
     else:
         print(f"{function.gettime()}: No encrypted images detected.")
         if log:
@@ -635,7 +669,16 @@ def processChapter(chapterUrl, chapterTitle, chapterNumber, mgFolder, iThread, d
 
     return None
 
-def detectEncrypt(soup):
+def detectEncrypt(soup, chapterURL):
+    domain = urllib.parse.urlparse(chapterURL).netloc
+    domain = domain.replace('www.', '')
+    print(f"The domain is {domain}.")
+    # Force set Encrypted to these site.
+    domainList = FORCE_IMG_ENCRYPT.get(domain, False)
+    if domainList is True:
+        print(f"This site {domain} must use the bypass method.")
+        return True
+    
     # Check for Tiled Images (background-image with offsets)
     if soup.find(style=re.compile(r"background-image:\s*url\((.*?)\)")):
         print(f"{function.gettime()}: ⚠️ Tiled background images detected!")
@@ -724,6 +767,14 @@ def findImg(soup):
         return imgList
     return imgList if imgList else []
 
+def cleanURL(url):
+    # Find all image extensions and pick the last match
+    matches = list(re.finditer(r'\.(jpg|jpeg|webp|jfif|png|avif)', url, re.IGNORECASE))
+    if matches:
+        last_match = matches[-1]
+        return url[:last_match.end()]
+    return url
+
 def dlImg(i, imgUrl, chapterNumber, chapterUrl, chapterPath, debug, log, logFile, notDown):
     print(f"{function.gettime()}: ⏳ Downloading image {imgUrl}...")
     excludeFile = "excludedomain.txt"
@@ -752,7 +803,11 @@ def dlImg(i, imgUrl, chapterNumber, chapterUrl, chapterPath, debug, log, logFile
             function.writeFile(logFile, f"{function.gettime()}: ⚠️ Added 'https:' to image link.\n")
 
     # Fix domain name change
-    imgUrl = imgUrl.replace("manga168.com", "manga168.net")
+    imgUrl = imgUrl.replace("manga168.com", "manga1668.com")
+    imgUrl = imgUrl.replace("manga168.net", "manga1668.com")
+    
+    # Remvoe unused charactors after extension
+    imgUrl = cleanURL(imgUrl)
 
     # Check the file extension
     fileExtension = os.path.splitext(imgUrl)[1]
@@ -894,13 +949,14 @@ def captureImg(chapterUrl, chapterNumber, chapterPath, debug, savejson, log, log
     
     attempt = 0
     maxRetires = 3
+    status = None
     
     for attempt in range(maxRetires):
         try:
             #function.waitNet()
             
             driver = webdriver.Chrome(options=options)
-            driver.set_page_load_timeout(30)
+            driver.set_page_load_timeout(60)
             driver.get(chapterUrl)
             WebDriverWait(driver, 5).until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, "body"))
@@ -925,7 +981,7 @@ def captureImg(chapterUrl, chapterNumber, chapterPath, debug, savejson, log, log
                 time.sleep(0.5)
                 
                 # **Wait for all images to load before capturing**
-                chapturing(driver, readDiv, chapterNumber, chapterPath, log, logFile)
+                status = chapturing(driver, readDiv, chapterNumber, chapterPath, log, logFile)
                 
             break
         except Exception as e:
@@ -933,7 +989,9 @@ def captureImg(chapterUrl, chapterNumber, chapterPath, debug, savejson, log, log
             attempt += 1
             time.sleep(3)
             driver.quit()
+            status = False
     driver.quit()
+    return status
 
 def getReadDiv(driver):
     print(f"{function.gettime()}: Finding read element from page.")
@@ -1149,6 +1207,9 @@ def chapturing(driver, readDiv, chapterNumber, chapterPath, log, logFile):
 
     # Restore window size after capturing
     driver.set_window_size(viewport_width, viewport_height)
+    
+    # Check downloaded image files
+    return screenshot_count != 0 and screenshot_count == function.countFiles(chapterPath)
 
 def waitForImages(driver, readDiv, timeout=60):
     """
